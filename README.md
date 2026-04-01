@@ -6,8 +6,8 @@
 <hr>
 
 <div align="center" style="line-height: 1;">
-    <a href="https://github.com/meituan-longcat/LongCat-AudioDiT/blob/main/LongCat-AudioDiT.pdf">
-    <img alt="License" src="https://img.shields.io/badge/Paper-LongCatAudioDiT-blue" style="display: inline-block; vertical-align: middle;"/>  
+    <a href="https://arxiv.org/abs/2603.29339">
+    <img alt="Paper" src="https://img.shields.io/badge/arXiv-2603.29339-b31b1b.svg" style="display: inline-block; vertical-align: middle;"/>  
     </a>
     <a href="https://github.com/meituan-longcat/LongCat-AudioDiT" target="_blank" style="margin: 2px;">
         <img alt="GitHub" src="https://img.shields.io/badge/GitHub-LongCatAudioDiT-white?logo=github&logoColor=white&color=a4b5d5" style="display: inline-block; vertical-align: middle;"/>
