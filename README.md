@@ -179,4 +179,4 @@ For details, see the [LICENSE](./LICENSE) file.
 Please contact us at <a href="mailto:longcat-team@meituan.com">longcat-team@meituan.com</a> or open an issue if you have any questions.
 
 #### WeChat Group
-<img src=./assets/longcat_wechat_group.png width="200px">
+<img src=./assets/longcat_wechat_group.jpeg width="200px">
