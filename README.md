@@ -12,6 +12,9 @@
     <a href="https://github.com/meituan-longcat/LongCat-AudioDiT" target="_blank" style="margin: 2px;">
         <img alt="GitHub" src="https://img.shields.io/badge/GitHub-LongCatAudioDiT-white?logo=github&logoColor=white&color=a4b5d5" style="display: inline-block; vertical-align: middle;"/>
     </a>
+        <a href="https://aria-k-alethia.github.io/LongCat-AudioDiT-demo" target="_blank" style="margin: 2px;">
+        <img alt="Demo" src="https://img.shields.io/badge/Demo-LongCatAudioDiT-white?logo=googleplay&logoColor=white&color=eabcdd" style="display: inline-block; vertical-align: middle;"/>
+    </a>
 </div>
 <div align="center" style="line-height: 1;">
     <a href="https://huggingface.co/meituan-longcat/LongCat-AudioDiT-3.5B" target="_blank" style="margin: 2px;">
