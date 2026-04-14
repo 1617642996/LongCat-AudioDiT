@@ -217,7 +217,7 @@ def run_eval(
         model           : 已 unwrap 的 AudioDiTModel（eval.py 内不重新 from_pretrained）
         tokenizer       : 对应 tokenizer
         samples_dir     : 本地音频目录（递归搜索 *.wav）
-        output_dir      : 基础输出目录；生成音频写入 output_dir/step_{step:07d}/
+        output_dir      : 保留参数（未使用）；生成音频直接写入 samples_dir 各 pair 目录下
         step            : 当前训练步数（用于命名和 TensorBoard global_step）
         gen_text        : 固定的待合成文本
         writer          : SummaryWriter（传 None 则不写 TensorBoard）
@@ -227,8 +227,6 @@ def run_eval(
         device = next(model.parameters()).device
 
     samples_dir = Path(samples_dir)
-    step_dir    = output_dir / f"step_{step:07d}"
-    step_dir.mkdir(parents=True, exist_ok=True)
 
     asr   = _ASRModel(whisper_model_name, device)
     items = load_samples(samples_dir, asr)
@@ -238,7 +236,8 @@ def run_eval(
     wers = []
     try:
         for i, (wav_path, prompt_text) in enumerate(items):
-            out_path = _output_path(step_dir, samples_dir, wav_path)
+            # 生成音频写到原始 reference.wav 同级目录，按 step 命名
+            out_path = wav_path.parent / f"step_{step:07d}.wav"
             wav_np = infer_one(
                 gen_text        = gen_text,
                 prompt_text     = prompt_text,

@@ -26,7 +26,7 @@ training:
   max_grad_norm: 1.0
   save_every: 1000
   log_every: 50
-  num_workers: 0
+  num_workers: 16
   seed: 42
   output_dir: "./checkpoint"
   resume_from: null
