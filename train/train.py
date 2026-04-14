@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 # ── path setup ────────────────────────────────────────────────────────────────
 FINETUNE_DIR = Path(__file__).resolve().parent
-LONGCAT_DIR  = FINETUNE_DIR.parent.parent
+LONGCAT_DIR  = FINETUNE_DIR.parent
 sys.path.insert(0, str(LONGCAT_DIR))   # for: import audiodit
 sys.path.insert(0, str(FINETUNE_DIR))  # for: from lora_utils import ...
 
