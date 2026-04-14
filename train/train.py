@@ -33,6 +33,7 @@ import torch
 import torch.nn.functional as F
 import yaml
 from torch.utils.data import DataLoader
+from accelerate import Accelerator
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
 import audiodit  # noqa: F401 — registers AudioDiTConfig/AudioDiTModel
@@ -229,9 +230,20 @@ def main():
     random.seed(seed)
     torch.manual_seed(seed)
 
-    device   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    train_cfg = cfg["training"]
+    data_cfg  = cfg["data"]
     dtype_str = cfg["model"].get("dtype", "bfloat16")
     dtype     = {"float32": torch.float32, "bfloat16": torch.bfloat16}[dtype_str]
+    grad_acc  = train_cfg.get("gradient_accumulation", 1)
+    mp_str    = {torch.float32: "no", torch.bfloat16: "bf16"}[dtype]
+
+    accelerator = Accelerator(
+        mixed_precision=mp_str,
+        gradient_accumulation_steps=grad_acc,
+    )
+    device = accelerator.device
+    if not accelerator.is_main_process:
+        logging.getLogger().setLevel(logging.WARNING)
 
     # 模型
     comps     = cfg.get("components", {})
@@ -246,12 +258,10 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(model.config.text_encoder_model)
 
     # 数据
-    data_cfg  = cfg["data"]
-    train_cfg = cfg["training"]
-
     dataset = PsStreamDataset(
         split          = data_cfg.get("hf_split", "train"),
-        shard_frac     = data_cfg.get("shard_frac", 1.0),
+        shard_frac     = data_cfg.get("shard_frac", 1.0) / accelerator.num_processes,
+        shard_offset   = accelerator.process_index,
         sample_rate    = data_cfg.get("sample_rate", 24000),
         min_audio_sec  = data_cfg.get("min_audio_sec", 4.0),
         max_audio_sec  = data_cfg.get("max_audio_sec", 20.0),
@@ -283,14 +293,15 @@ def main():
         num_training_steps=train_cfg["steps"],
     )
 
+    model, optimizer, dl, scheduler = accelerator.prepare(model, optimizer, dl, scheduler)
+
     # 续训
     resume_from = train_cfg.get("resume_from")
     if resume_from:
-        load_lora(model, resume_from)
+        load_lora(accelerator.unwrap_model(model), resume_from)
         log.info(f"Resumed from {resume_from}")
 
     # 训练循环
-    grad_acc   = train_cfg.get("gradient_accumulation", 1)
     log_every  = train_cfg.get("log_every", 50)
     save_every = train_cfg.get("save_every", 1000)
     max_steps  = train_cfg["steps"]
@@ -310,41 +321,44 @@ def main():
                 break
 
             log.info(f"step={step}  wav={batch['wav'].shape}  forward...")
-            with torch.autocast(device_type=device.type, dtype=dtype, enabled=use_amp):
-                loss = cfm_step(
-                    model=model,
-                    wav=batch["wav"],
-                    wav_lens_samples=batch["wav_lens"],
-                    prompt_lens_samples=batch["prompt_lens"],
-                    input_ids=batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                    device=device,
-                    dtype=dtype,
-                    train_vae=train_vae,
-                )
-                loss = loss / grad_acc
+            with accelerator.accumulate(model):
+                with torch.autocast(device_type=device.type, dtype=dtype, enabled=use_amp):
+                    loss = cfm_step(
+                        model=model,
+                        wav=batch["wav"],
+                        wav_lens_samples=batch["wav_lens"],
+                        prompt_lens_samples=batch["prompt_lens"],
+                        input_ids=batch["input_ids"],
+                        attention_mask=batch["attention_mask"],
+                        device=device,
+                        dtype=dtype,
+                        train_vae=train_vae,
+                    )
+                    loss = loss / grad_acc
 
-            log.info(f"step={step}  loss={loss.item()*grad_acc:.4f}  backward...")
-            loss.backward()
-            running_loss += loss.item() * grad_acc
-
-            if (step + 1) % grad_acc == 0:
-                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm)
+                log.info(f"step={step}  loss={loss.item()*grad_acc:.4f}  backward...")
+                accelerator.backward(loss)
+                if accelerator.sync_gradients:
+                    accelerator.clip_grad_norm_(model.parameters(), max_norm)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
 
-            if step % log_every == 0 and step > 0:
-                lr = scheduler.get_last_lr()[0]
-                log.info(f"step={step:6d}  loss={running_loss/log_every:.4f}  lr={lr:.2e}")
-                running_loss = 0.0
+            running_loss += loss.item() * grad_acc
 
-            if step > 0 and step % save_every == 0:
-                save_checkpoint(model, output_dir, step)
+            if accelerator.is_main_process:
+                if step % log_every == 0 and step > 0:
+                    lr = scheduler.get_last_lr()[0]
+                    log.info(f"step={step:6d}  loss={running_loss/log_every:.4f}  lr={lr:.2e}")
+                    running_loss = 0.0
+
+                if step > 0 and step % save_every == 0:
+                    save_checkpoint(accelerator.unwrap_model(model), output_dir, step)
 
             step += 1
 
-    save_checkpoint(model, output_dir, step)
+    if accelerator.is_main_process:
+        save_checkpoint(accelerator.unwrap_model(model), output_dir, step)
     log.info("Training complete.")
 
 
