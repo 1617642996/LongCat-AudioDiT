@@ -66,7 +66,7 @@ def load_samples(samples_dir: Path, asr) -> list[tuple[Path, str]]:
     返回 (wav_path, text) 列表。递归搜索子目录下的 wav 文件。
     txt 文件不存在时用 Whisper 转录并写回。
     """
-    wav_paths = sorted(samples_dir.rglob("*.wav"))
+    wav_paths = sorted(samples_dir.rglob("reference.wav"))
     assert wav_paths, f"No wav files found in {samples_dir}"
 
     items = []
@@ -228,7 +228,7 @@ def run_eval(
 
     samples_dir = Path(samples_dir)
 
-    asr   = _ASRModel(whisper_model_name, device)
+    asr   = _ASRModel(whisper_model_name, "cpu")
     items = load_samples(samples_dir, asr)
 
     was_training = model.training

@@ -204,10 +204,17 @@ from dataset_ps import PsStreamDataset, ps_collate_fn
 
 # ─── checkpoint ──────────────────────────────────────────────────────────────
 
-def save_checkpoint(model: AudioDiTModel, output_dir: Path, step: int) -> None:
+def save_checkpoint(model: AudioDiTModel, output_dir: Path, step: int,
+                    optimizer=None, scheduler=None) -> None:
     """保存 LoRA adapter + 全量组件权重（PEFT 格式，eval.py 的 load_lora 可直接加载）。"""
     ckpt_dir = output_dir / f"step_{step:07d}"
     save_lora(model, ckpt_dir)
+    if optimizer is not None:
+        state = {"step": step, "optimizer": optimizer.state_dict()}
+        if scheduler is not None:
+            state["scheduler"] = scheduler.state_dict()
+        torch.save(state, ckpt_dir / "training_state.pt")
+        log.info(f"Saved training_state.pt (step={step})")
     log.info(f"Saved → {ckpt_dir}")
 
 
@@ -302,9 +309,19 @@ def main():
 
     # 续训
     resume_from = train_cfg.get("resume_from")
+    resume_step = 0
     if resume_from:
         load_lora(accelerator.unwrap_model(model), resume_from, trainable=True)
-        log.info(f"Resumed from {resume_from}")
+        ts_path = Path(resume_from) / "training_state.pt"
+        if ts_path.exists():
+            ts = torch.load(ts_path, map_location="cpu", weights_only=True)
+            resume_step = ts["step"]
+            optimizer.load_state_dict(ts["optimizer"])
+            if "scheduler" in ts:
+                scheduler.load_state_dict(ts["scheduler"])
+            log.info(f"Resumed from {resume_from}  step={resume_step}")
+        else:
+            log.info(f"Resumed from {resume_from}  (no training_state.pt, step=0)")
 
     eval_cfg   = cfg.get("eval", {})
 
@@ -320,12 +337,12 @@ def main():
 
     writer = SummaryWriter(log_dir=str(output_dir / "tb")) if accelerator.is_main_process else None
 
-    step         = 0
+    step         = resume_step
     running_loss = 0.0
     optimizer.zero_grad()
 
-    # step=0：在任何梯度更新之前保存基座 checkpoint 并做 eval
-    if accelerator.is_main_process:
+    # step=0：在任何梯度更新之前保存基座 checkpoint 并做 eval（续训时跳过）
+    if step == 0 and accelerator.is_main_process:
         save_checkpoint(accelerator.unwrap_model(model), output_dir, step)
         if eval_cfg.get("samples_dir"):
             run_eval(
@@ -382,7 +399,8 @@ def main():
                     running_loss = 0.0
 
                 if step % save_every == 0 and step > 0:
-                    save_checkpoint(accelerator.unwrap_model(model), output_dir, step)
+                    save_checkpoint(accelerator.unwrap_model(model), output_dir, step,
+                                    optimizer=optimizer, scheduler=scheduler)
                     if eval_cfg.get("samples_dir"):
                         run_eval(
                             model           = accelerator.unwrap_model(model),
@@ -404,7 +422,7 @@ def main():
 
     if accelerator.is_main_process:
         raw = accelerator.unwrap_model(model)
-        save_checkpoint(raw, output_dir, step)
+        save_checkpoint(raw, output_dir, step, optimizer=optimizer, scheduler=scheduler)
         # 训练结束时额外保存一份 merged 版本（LoRA 已 bake 进权重，无需 PEFT 即可推理）
         save_lora(raw, output_dir / "merged", merged=True)
         log.info(f"Merged checkpoint saved → {output_dir / 'merged'}")

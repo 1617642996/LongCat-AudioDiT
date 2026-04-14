@@ -18,6 +18,7 @@ data:
   max_text_len: 512
 
 training:
+  resume_from: "./checkpoint/step_0000000"
   steps: 10000
   batch_size: 16
   gradient_accumulation: 1
