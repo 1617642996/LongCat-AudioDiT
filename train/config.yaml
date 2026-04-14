@@ -91,6 +91,15 @@ components:
   vae:
     mode: frozen
 
+# ─── 推理评估（每 save_every 步自动运行）────────────────────────────────────────
+eval:
+  samples_dir: "/workspace/LongCat-AudioDiT/audios/Clean"   # 递归搜索 *.wav 作为 prompt
+  gen_text: "A gentle breeze blew across the open field as the sun began to set in the west."
+  nfe: 16
+  cfg_strength: 4.0
+  guidance_method: "cfg"
+  whisper_model: "base"   # Whisper 型号，用于 prompt 转录 + WER 计算
+
 # ─── accelerate 启动参数 ──────────────────────────────────────────────────────
 # 仅作记录，实际由 accelerate launch --num_processes 读取
 # mixed_precision 由上方 model.dtype 决定，train.py 自动转换

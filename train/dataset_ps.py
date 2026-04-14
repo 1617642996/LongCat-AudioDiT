@@ -251,7 +251,6 @@ def ps_collate_fn(batch: list[dict], tokenizer=None, max_text_len: int = 512) ->
         "wav":         wav_padded,
         "wav_lens":    wav_lens,
         "prompt_lens": prompt_lens,
-        "text":        [x["text"] for x in batch],
     }
     if tokenizer is not None:
         enc = tokenizer(

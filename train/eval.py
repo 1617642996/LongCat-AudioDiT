@@ -23,7 +23,7 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
-import librosaC
+import librosa
 import numpy as np
 import soundfile as sf
 import torch
@@ -47,10 +47,10 @@ BASE_MODEL_DIR = "meituan-longcat/LongCat-AudioDiT-1B"
 
 def load_samples(samples_dir: Path, asr) -> list[tuple[Path, str]]:
     """
-    返回 (wav_path, text) 列表。
+    返回 (wav_path, text) 列表。递归搜索子目录下的 wav 文件。
     txt 文件不存在时用 Whisper 转录并写回。
     """
-    wav_paths = sorted(samples_dir.glob("*.wav"))
+    wav_paths = sorted(samples_dir.rglob("*.wav"))
     assert wav_paths, f"No wav files found in {samples_dir}"
 
     items = []
@@ -128,7 +128,7 @@ def main() -> None:
     rows    = []          # 用于 step 目录内的 results.csv
     gen_text = args.gen_text
     for i, (wav_path, text) in enumerate(items):
-        out_path = output_dir / wav_path.name
+        out_path = output_dir / (wav_path.parent.name + ".wav")
         wav_np = infer_one(
             gen_text        = gen_text,
             prompt_text     = text,
@@ -169,6 +169,98 @@ def main() -> None:
         if write_hdr:
             w.writerow(["step", "mean_wer", "n_samples", "gen_text"])
         w.writerow([args.step, f"{mean_wer:.4f}", len(items), gen_text])
+
+
+@torch.no_grad()
+def run_eval(
+    model,
+    tokenizer,
+    samples_dir: str,
+    output_dir: Path,
+    step: int,
+    gen_text: str,
+    nfe: int = 16,
+    cfg_strength: float = 4.0,
+    guidance_method: str = "cfg",
+    whisper_model_name: str = "base",
+    device=None,
+    writer=None,
+    train_vae: bool = False,
+) -> None:
+    """
+    在 checkpoint 时刻推理并记录日志。复用训练进程中已加载的 model，不重新加载权重。
+
+    Args:
+        model           : 已 unwrap 的 AudioDiTModel（eval.py 内不重新 from_pretrained）
+        tokenizer       : 对应 tokenizer
+        samples_dir     : 本地音频目录（递归搜索 *.wav）
+        output_dir      : 基础输出目录；生成音频写入 output_dir/step_{step:07d}/
+        step            : 当前训练步数（用于命名和 TensorBoard global_step）
+        gen_text        : 固定的待合成文本
+        writer          : SummaryWriter（传 None 则不写 TensorBoard）
+        train_vae       : 与训练循环一致，决定 eval 后是否把 vae 恢复成 eval 模式
+    """
+    import whisper
+
+    if device is None:
+        device = next(model.parameters()).device
+
+    samples_dir = Path(samples_dir)
+    step_dir    = output_dir / f"step_{step:07d}"
+    step_dir.mkdir(parents=True, exist_ok=True)
+
+    asr   = whisper.load_model(whisper_model_name, device=str(device))
+    items = load_samples(samples_dir, asr)
+
+    was_training = model.training
+    model.eval()
+    wers = []
+    try:
+        for i, (wav_path, prompt_text) in enumerate(items):
+            out_path = step_dir / (wav_path.parent.name + ".wav")
+            wav_np = infer_one(
+                gen_text        = gen_text,
+                prompt_text     = prompt_text,
+                prompt_wav_path = str(wav_path),
+                model           = model,
+                tokenizer       = tokenizer,
+                device          = device,
+                nfe             = nfe,
+                cfg_strength    = cfg_strength,
+                guidance_method = guidance_method,
+            )
+            sf.write(str(out_path), wav_np, model.config.sampling_rate)
+
+            audio_16k, _ = librosa.load(str(out_path), sr=16000, mono=True)
+            hyp = asr.transcribe(audio_16k, language=None)["text"].strip()
+            wer = word_error_rate(hyp, gen_text)
+            wers.append(wer)
+
+            category = wav_path.parent.parent.name   # Clean / High_Noise / ...
+            print(f"  [{step}][{category}/{wav_path.parent.name}] WER={wer:.3f}", flush=True)
+
+            if writer is not None:
+                wav_t = torch.from_numpy(wav_np).unsqueeze(0)  # [1, T]
+                writer.add_audio(
+                    f"eval/{category}/{wav_path.parent.name}",
+                    wav_t, step,
+                    sample_rate=model.config.sampling_rate,
+                )
+    finally:
+        del asr
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        if was_training:
+            model.train()
+            if not train_vae:
+                model.vae.eval()
+            model.text_encoder.eval()
+
+    if wers:
+        mean_wer = float(np.mean(wers))
+        print(f"Eval step={step}  mean_WER={mean_wer:.4f}  n={len(wers)}", flush=True)
+        if writer is not None:
+            writer.add_scalar("eval/WER", mean_wer, step)
 
 
 if __name__ == "__main__":

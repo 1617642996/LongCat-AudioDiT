@@ -29,16 +29,19 @@ LONGCAT_DIR  = FINETUNE_DIR.parent
 sys.path.insert(0, str(LONGCAT_DIR))   # for: import audiodit
 sys.path.insert(0, str(FINETUNE_DIR))  # for: from lora_utils import ...
 
+import soundfile as sf
 import torch
 import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
 import yaml
 from torch.utils.data import DataLoader
-from accelerate import Accelerator
+from accelerate import Accelerator, DataLoaderConfiguration
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
 import audiodit  # noqa: F401 — registers AudioDiTConfig/AudioDiTModel
 from audiodit import AudioDiTModel
 from audiodit.modeling_audiodit import lens_to_mask
+from eval import run_eval
 from lora_utils import inject_lora, save_lora, load_lora
 
 log = logging.getLogger(__name__)
@@ -122,7 +125,8 @@ def cfm_step(
     v_target   = z1 - z0                        [B, T_total, 64]
     loss       = MSE(v_pred[:, T_p:], v_target[:, T_p:])
     """
-    full_hop = model.config.latent_hop
+    raw      = getattr(model, 'module', model)  # unwrap DDP / FSDP if needed
+    full_hop = raw.config.latent_hop
     B = wav.shape[0]
 
     # 1. VAE encode — 逐样本 trim 到实际长度再编码
@@ -134,7 +138,7 @@ def cfm_step(
         z1_list: list[torch.Tensor] = []
         for i in range(B):
             wav_i        = wav_dev[i:i+1, :, :int(wav_lens_samples[i].item())]  # [1, 1, T_i]
-            z1_i, _      = model.encode_prompt_audio(wav_i)                      # [1, T_lat_i, 64]
+            z1_i, _      = raw.encode_prompt_audio(wav_i)                         # [1, T_lat_i, 64]
             z1_list.append(z1_i[0])                                              # [T_lat_i, 64]
 
     T_lat_per = [z.shape[0] for z in z1_list]
@@ -163,7 +167,7 @@ def cfm_step(
     v_target = z1 - z0                                         # [B, T_total, 64]
 
     # 6. 文本编码 — encode_text 内部已有 torch.no_grad()
-    text_emb = model.encode_text(
+    text_emb = raw.encode_text(
         input_ids.to(device), attention_mask.to(device)
     )                                                           # [B, S, text_dim]
     text_len = attention_mask.sum(dim=1).to(device)            # [B]
@@ -173,7 +177,7 @@ def cfm_step(
     text_mask  = lens_to_mask(text_len, text_emb.shape[1])     # [B, S]
 
     # 8. Transformer forward
-    output = model.transformer(
+    output = raw.transformer(
         x=x_t.to(dtype),
         text=text_emb.to(dtype),
         text_len=text_len,
@@ -240,6 +244,7 @@ def main():
     accelerator = Accelerator(
         mixed_precision=mp_str,
         gradient_accumulation_steps=grad_acc,
+        dataloader_config=DataLoaderConfiguration(dispatch_batches=False),
     )
     device = accelerator.device
     if not accelerator.is_main_process:
@@ -301,6 +306,8 @@ def main():
         load_lora(accelerator.unwrap_model(model), resume_from)
         log.info(f"Resumed from {resume_from}")
 
+    eval_cfg   = cfg.get("eval", {})
+
     # 训练循环
     log_every  = train_cfg.get("log_every", 50)
     save_every = train_cfg.get("save_every", 1000)
@@ -311,6 +318,8 @@ def main():
         output_dir = FINETUNE_DIR / output_dir
     use_amp    = (dtype != torch.float32)
 
+    writer = SummaryWriter(log_dir=str(output_dir / "tb")) if accelerator.is_main_process else None
+
     step         = 0
     running_loss = 0.0
     optimizer.zero_grad()
@@ -320,7 +329,6 @@ def main():
             if step >= max_steps:
                 break
 
-            log.info(f"step={step}  wav={batch['wav'].shape}  forward...")
             with accelerator.accumulate(model):
                 with torch.autocast(device_type=device.type, dtype=dtype, enabled=use_amp):
                     loss = cfm_step(
@@ -335,8 +343,6 @@ def main():
                         train_vae=train_vae,
                     )
                     loss = loss / grad_acc
-
-                log.info(f"step={step}  loss={loss.item()*grad_acc:.4f}  backward...")
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), max_norm)
@@ -348,17 +354,53 @@ def main():
 
             if accelerator.is_main_process:
                 if step % log_every == 0 and step > 0:
-                    lr = scheduler.get_last_lr()[0]
-                    log.info(f"step={step:6d}  loss={running_loss/log_every:.4f}  lr={lr:.2e}")
+                    lr   = scheduler.get_last_lr()[0]
+                    avg  = running_loss / log_every
+                    log.info(f"step={step:6d}  loss={avg:.4f}  lr={lr:.2e}")
+                    writer.add_scalar("train/loss", avg, step)
+                    writer.add_scalar("train/lr",   lr,  step)
                     running_loss = 0.0
 
-                if step > 0 and step % save_every == 0:
+                if step % save_every == 0:
                     save_checkpoint(accelerator.unwrap_model(model), output_dir, step)
+                    if eval_cfg.get("samples_dir"):
+                        run_eval(
+                            model           = accelerator.unwrap_model(model),
+                            tokenizer       = tokenizer,
+                            samples_dir     = eval_cfg["samples_dir"],
+                            output_dir      = output_dir,
+                            step            = step,
+                            gen_text        = eval_cfg.get("gen_text", "A gentle breeze blew across the open field as the sun began to set in the west."),
+                            nfe             = eval_cfg.get("nfe", 16),
+                            cfg_strength    = eval_cfg.get("cfg_strength", 4.0),
+                            guidance_method = eval_cfg.get("guidance_method", "cfg"),
+                            whisper_model_name = eval_cfg.get("whisper_model", "base"),
+                            device          = device,
+                            writer          = writer,
+                            train_vae       = train_vae,
+                        )
 
             step += 1
 
     if accelerator.is_main_process:
         save_checkpoint(accelerator.unwrap_model(model), output_dir, step)
+        if eval_cfg.get("samples_dir"):
+            run_eval(
+                model           = accelerator.unwrap_model(model),
+                tokenizer       = tokenizer,
+                samples_dir     = eval_cfg["samples_dir"],
+                output_dir      = output_dir,
+                step            = step,
+                gen_text        = eval_cfg.get("gen_text", "A gentle breeze blew across the open field as the sun began to set in the west."),
+                nfe             = eval_cfg.get("nfe", 16),
+                cfg_strength    = eval_cfg.get("cfg_strength", 4.0),
+                guidance_method = eval_cfg.get("guidance_method", "cfg"),
+                whisper_model_name = eval_cfg.get("whisper_model", "base"),
+                device          = device,
+                writer          = writer,
+                train_vae       = train_vae,
+            )
+        writer.close()
     log.info("Training complete.")
 
 
