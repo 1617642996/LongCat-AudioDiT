@@ -160,3 +160,15 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# ── project-specific ──────────────────────────────────────────────────────────
+# 音频 prompt 文件（本地评估用，不入库）
+audios/
+
+# 训练产物
+train/checkpoints/
+*.safetensors
+*.bin
+
+# TensorBoard 日志
+events.out.tfevents.*
