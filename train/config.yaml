@@ -26,11 +26,10 @@ training:
   warmup_steps: 1000
   max_grad_norm: 1.0
   save_every: 1000
-  log_every: 100
+  log_every: 50
   num_workers: 16
   seed: 42
   output_dir: "./checkpoint"
-  resume_from: null
 
 # ─── LoRA 全局超参 ────────────────────────────────────────────────────────────
 lora:

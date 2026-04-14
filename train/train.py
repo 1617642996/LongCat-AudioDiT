@@ -299,10 +299,13 @@ def main():
     # 优化器
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable_params, lr=train_cfg["learning_rate"])
+    # 每个 GPU 进程各自调用 scheduler.step()，所以实际步数 = code_step × num_processes。
+    # 乘以 num_processes 让 warmup 和 total steps 与 code step 对齐。
+    n_proc = accelerator.num_processes
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
-        num_warmup_steps=train_cfg.get("warmup_steps", 500),
-        num_training_steps=train_cfg["steps"],
+        num_warmup_steps=train_cfg.get("warmup_steps", 500) * n_proc,
+        num_training_steps=train_cfg["steps"] * n_proc,
     )
 
     model, optimizer, dl, scheduler = accelerator.prepare(model, optimizer, dl, scheduler)
