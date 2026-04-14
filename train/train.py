@@ -342,24 +342,24 @@ def main():
     optimizer.zero_grad()
 
     # step=0：在任何梯度更新之前保存基座 checkpoint 并做 eval（续训时跳过）
-    if step == 0 and accelerator.is_main_process:
-        save_checkpoint(accelerator.unwrap_model(model), output_dir, step)
-        if eval_cfg.get("samples_dir"):
-            run_eval(
-                model              = accelerator.unwrap_model(model),
-                tokenizer          = tokenizer,
-                samples_dir        = eval_cfg["samples_dir"],
-                output_dir         = output_dir,
-                step               = step,
-                gen_text           = eval_cfg.get("gen_text", "A gentle breeze blew across the open field as the sun began to set in the west."),
-                nfe                = eval_cfg.get("nfe", 16),
-                cfg_strength       = eval_cfg.get("cfg_strength", 4.0),
-                guidance_method    = eval_cfg.get("guidance_method", "cfg"),
-                whisper_model_name = eval_cfg.get("whisper_model", "base"),
-                device             = device,
-                writer             = writer,
-                train_vae          = train_vae,
-            )
+    # if step == 0 and accelerator.is_main_process:
+    #     save_checkpoint(accelerator.unwrap_model(model), output_dir, step)
+    #     if eval_cfg.get("samples_dir"):
+    #         run_eval(
+    #             model              = accelerator.unwrap_model(model),
+    #             tokenizer          = tokenizer,
+    #             samples_dir        = eval_cfg["samples_dir"],
+    #             output_dir         = output_dir,
+    #             step               = step,
+    #             gen_text           = eval_cfg.get("gen_text", "A gentle breeze blew across the open field as the sun began to set in the west."),
+    #             nfe                = eval_cfg.get("nfe", 16),
+    #             cfg_strength       = eval_cfg.get("cfg_strength", 4.0),
+    #             guidance_method    = eval_cfg.get("guidance_method", "cfg"),
+    #             whisper_model_name = eval_cfg.get("whisper_model", "base"),
+    #             device             = device,
+    #             writer             = writer,
+    #             train_vae          = train_vae,
+    #         )
 
     while step < max_steps:
         for batch in dl:
@@ -390,7 +390,13 @@ def main():
             running_loss += loss.item() * grad_acc
 
             if accelerator.is_main_process:
-                if step % log_every == 0 and step > 0:
+                if step == 0:
+                    lr = scheduler.get_last_lr()[0]
+                    log.info(f"step=0  init loss (base model, first batch) = {running_loss:.4f}  lr={lr:.2e}")
+                    if writer:
+                        writer.add_scalar("train/loss", running_loss, 0)
+                    running_loss = 0.0  # 重置，之后从 step=1 开始正常累积
+                elif step % log_every == 0:
                     lr   = scheduler.get_last_lr()[0]
                     avg  = running_loss / log_every
                     log.info(f"step={step:6d}  loss={avg:.4f}  lr={lr:.2e}")

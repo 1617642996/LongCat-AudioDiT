@@ -26,7 +26,7 @@ training:
   warmup_steps: 500
   max_grad_norm: 1.0
   save_every: 1000
-  log_every: 50
+  log_every: 100
   num_workers: 16
   seed: 42
   output_dir: "./checkpoint"
