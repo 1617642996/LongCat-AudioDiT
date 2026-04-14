@@ -90,3 +90,9 @@ components:
   # VAE：改变 latent 空间会破坏 DiT 对齐，需与 DiT 同步训练，默认冻结
   vae:
     mode: frozen
+
+# ─── accelerate 启动参数 ──────────────────────────────────────────────────────
+# 仅作记录，实际由 accelerate launch --num_processes 读取
+# mixed_precision 由上方 model.dtype 决定，train.py 自动转换
+accelerate:
+  num_processes: 4   # 使用的 GPU 数量
