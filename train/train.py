@@ -324,6 +324,26 @@ def main():
     running_loss = 0.0
     optimizer.zero_grad()
 
+    # step=0：在任何梯度更新之前保存基座 checkpoint 并做 eval
+    if accelerator.is_main_process:
+        save_checkpoint(accelerator.unwrap_model(model), output_dir, step)
+        if eval_cfg.get("samples_dir"):
+            run_eval(
+                model              = accelerator.unwrap_model(model),
+                tokenizer          = tokenizer,
+                samples_dir        = eval_cfg["samples_dir"],
+                output_dir         = output_dir,
+                step               = step,
+                gen_text           = eval_cfg.get("gen_text", "A gentle breeze blew across the open field as the sun began to set in the west."),
+                nfe                = eval_cfg.get("nfe", 16),
+                cfg_strength       = eval_cfg.get("cfg_strength", 4.0),
+                guidance_method    = eval_cfg.get("guidance_method", "cfg"),
+                whisper_model_name = eval_cfg.get("whisper_model", "base"),
+                device             = device,
+                writer             = writer,
+                train_vae          = train_vae,
+            )
+
     while step < max_steps:
         for batch in dl:
             if step >= max_steps:
@@ -361,7 +381,7 @@ def main():
                     writer.add_scalar("train/lr",   lr,  step)
                     running_loss = 0.0
 
-                if step % save_every == 0:
+                if step % save_every == 0 and step > 0:
                     save_checkpoint(accelerator.unwrap_model(model), output_dir, step)
                     if eval_cfg.get("samples_dir"):
                         run_eval(

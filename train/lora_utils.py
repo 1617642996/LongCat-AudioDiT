@@ -185,10 +185,14 @@ def load_lora(base_model, path: Union[str, Path], trainable: bool = False) -> ob
     for p in base_model.parameters():
         p.requires_grad_(False)
 
-    peft_transformer = PeftModel.from_pretrained(
-        base_model.transformer, str(path), is_trainable=trainable
-    )
-    base_model.transformer = peft_transformer
+    if isinstance(base_model.transformer, PeftModel):
+        # inject_lora 已注入过，直接加载 adapter 权重，避免双重包裹
+        base_model.transformer.load_adapter(str(path), adapter_name="default", is_trainable=trainable)
+    else:
+        peft_transformer = PeftModel.from_pretrained(
+            base_model.transformer, str(path), is_trainable=trainable
+        )
+        base_model.transformer = peft_transformer
 
     # Restore full-tune params (adaln, proj_out, latent_embed, etc.)
     extras_path = path / "extras.pt"
