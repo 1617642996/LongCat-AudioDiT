@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LongCat-AudioDiT fine-tuning config
+# ─────────────────────────────────────────────────────────────────────────────
+
+model:
+  model_dir: "C:/Users/26446/Desktop/tts_eval/models/meituan-longcat/LongCat-AudioDiT-1B"
+  dtype: "bfloat16"      # float32 | bfloat16
+
+data:
+  hf_split: "train"
+  shard_frac: 1.0       # 使用全量 shard；调试时可设 0.01
+  wer_max: 0.3          # 过滤转录质量差的样本（WER > 0.3 丢弃）
+  min_audio_sec: 4.0    # 太短无法切出 prompt 区
+  max_audio_sec: 20.0
+  prompt_min_sec: 2.0
+  prompt_max_sec: 8.0
+  sample_rate: 24000
+  max_text_len: 512
+
+training:
+  steps: 10000
+  batch_size: 2
+  gradient_accumulation: 4
+  learning_rate: 1.0e-4
+  warmup_steps: 500
+  max_grad_norm: 1.0
+  save_every: 1000
+  log_every: 50
+  num_workers: 0
+  seed: 42
+  output_dir: "./checkpoints"
+  resume_from: null
+
+# ─── LoRA 全局超参 ────────────────────────────────────────────────────────────
+lora:
+  r: 32
+  alpha: 32        # scale = alpha / r，建议与 r 相等
+  dropout: 0.05
+
+# ─── 可训练组件 ───────────────────────────────────────────────────────────────
+# mode: frozen — 冻结，不参与训练
+#        full   — 全量更新
+#        lora   — LoRA 低秩更新（使用上方 lora 全局超参）
+#
+# 组件说明（参数量基于 1B 配置 dim=1536, depth=24）：
+#   dit_attn        self_attn + cross_attn 的 Q/K/V/O 投影，~600M，建议 lora
+#   dit_ffn          FFN up/down linear，~340M，lora 略好于 frozen，参数翻倍
+#   dit_adaln       AdaLN 调制 MLP，~50M，参数小可直接 full
+#   text_conv       ConvNeXt v2 文本局部卷积，~9M，参数小可直接 full
+#   latent_embed         参考音频 clean latent 投影，~9M
+#   latent_cond_embedder noisy+clean concat 后融合投影（3072→1536），~18M
+#   input_embed          noisy latent 输入嵌入（64→1536），~5M
+#   output_proj     norm_out.linear + proj_out 输出头，~9M
+#   time_embed      时间步嵌入 MLP，~2M
+#   text_encoder    文本编码器（T5 等），适合跨域文本适配，支持 lora
+#   vae             音频 VAE，改变 latent 空间会破坏 DiT 对齐，谨慎开启
+# ─────────────────────────────────────────────────────────────────────────────
+components:
+  dit_attn:
+    mode: lora
+
+  dit_ffn:
+    mode: lora
+
+  dit_adaln:
+    mode: full
+
+  text_conv:
+    mode: full
+
+  latent_embed:
+    mode: full
+
+  latent_cond_embedder:
+    mode: full
+
+  input_embed:
+    mode: full
+
+  output_proj:
+    mode: full
+
+  time_embed:
+    mode: full
+
+  # 文本编码器：通常冻结；跨域适配时可改 lora
+  text_encoder:
+    mode: frozen
+
+  # VAE：改变 latent 空间会破坏 DiT 对齐，需与 DiT 同步训练，默认冻结
+  vae:
+    mode: frozen
