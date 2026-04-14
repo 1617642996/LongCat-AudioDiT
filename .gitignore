@@ -162,11 +162,8 @@ cython_debug/
 #.idea/
 
 # ── project-specific ──────────────────────────────────────────────────────────
-# 音频 prompt 文件（本地评估用，不入库）
-audios/
-
 # 训练产物
-train/checkpoints/
+train/checkpoint/
 *.safetensors
 *.bin
 

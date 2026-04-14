@@ -12,7 +12,7 @@ Usage:
     python eval.py --step 0 --samples_dir /path/to/wavs
 
     # 评估 LoRA checkpoint:
-    python eval.py --step 5000 --checkpoint_dir ./checkpoints/step_005000 --samples_dir /path/to/wavs
+    python eval.py --step 5000 --checkpoint_dir ./checkpoint/step_005000 --samples_dir /path/to/wavs
 """
 
 import argparse

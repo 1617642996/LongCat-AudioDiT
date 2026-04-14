@@ -28,7 +28,7 @@ Usage:
 
     # training loop ...
 
-    save_lora(peft_model, "checkpoints/step_005000")
+    save_lora(peft_model, "checkpoint/step_005000")
 
     # later, for inference with merged weights:
     merged = merge_and_unload(peft_model)

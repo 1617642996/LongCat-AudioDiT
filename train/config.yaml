@@ -28,7 +28,7 @@ training:
   log_every: 50
   num_workers: 0
   seed: 42
-  output_dir: "./checkpoints"
+  output_dir: "./checkpoint"
   resume_from: null
 
 # ─── LoRA 全局超参 ────────────────────────────────────────────────────────────
