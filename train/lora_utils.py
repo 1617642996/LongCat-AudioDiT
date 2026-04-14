@@ -140,12 +140,17 @@ def save_lora(model, path: Union[str, Path], merged: bool = False) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
     if merged:
-        # Merge B@A into W, unwrap PEFT, save full transformer state dict
+        # Merge LoRA B@A into base attention weights, then save full transformer
+        # state dict (includes adaln/proj_out/etc. full-tune params as-is).
+        # No PEFT dependency required at load time.
+        from safetensors.torch import save_file
         import copy
         tmp = copy.deepcopy(model)
         tmp.transformer = tmp.transformer.merge_and_unload()
-        torch.save(tmp.transformer.state_dict(), path / "transformer_merged.pt")
-        print(f"[lora_utils] merged weights saved → {path / 'transformer_merged.pt'}", flush=True)
+        sd = {k: v.contiguous() for k, v in tmp.transformer.state_dict().items()}
+        save_file(sd, path / "transformer_merged.safetensors")
+        del tmp
+        print(f"[lora_utils] merged weights saved → {path / 'transformer_merged.safetensors'}", flush=True)
     else:
         # Save adapter (A, B matrices only)
         model.transformer.save_pretrained(str(path))
@@ -163,13 +168,15 @@ def save_lora(model, path: Union[str, Path], merged: bool = False) -> None:
         print(f"[lora_utils] adapter saved → {path}", flush=True)
 
 
-def load_lora(base_model, path: Union[str, Path]) -> object:
+def load_lora(base_model, path: Union[str, Path], trainable: bool = False) -> object:
     """
     Load a previously saved LoRA adapter (+ optional extras.pt) onto a base model.
 
     Args:
         base_model : AudioDiTModel (frozen base weights, no LoRA yet)
         path       : directory containing adapter_config.json
+        trainable  : True  — re-enable requires_grad for LoRA + extras (resume training)
+                     False — inference only (default)
 
     Returns:
         The same AudioDiTModel with model.transformer replaced by a PeftModel.
@@ -179,16 +186,34 @@ def load_lora(base_model, path: Union[str, Path]) -> object:
         p.requires_grad_(False)
 
     peft_transformer = PeftModel.from_pretrained(
-        base_model.transformer, str(path), is_trainable=False
+        base_model.transformer, str(path), is_trainable=trainable
     )
     base_model.transformer = peft_transformer
 
-    # Restore full-tune params (proj_out, norm_out, etc.) if present
+    # Restore full-tune params (adaln, proj_out, latent_embed, etc.)
     extras_path = path / "extras.pt"
     if extras_path.exists():
-        extras = torch.load(extras_path, map_location="cpu")
+        extras = torch.load(extras_path, map_location="cpu", weights_only=True)
         missing, unexpected = base_model.transformer.load_state_dict(extras, strict=False)
-        print(f"[lora_utils] extras loaded ({len(extras)} tensors) ← {extras_path}", flush=True)
+        if missing:
+            print(f"[lora_utils] WARNING: {len(missing)} missing keys in extras — "
+                  f"first 5: {missing[:5]}", flush=True)
+        if unexpected:
+            print(f"[lora_utils] WARNING: {len(unexpected)} unexpected keys in extras — "
+                  f"first 5: {unexpected[:5]}", flush=True)
+        print(f"[lora_utils] extras loaded ({len(extras)} tensors, "
+              f"{len(missing)} missing, {len(unexpected)} unexpected) ← {extras_path}", flush=True)
+        # 恢复训练时重新开启梯度
+        if trainable:
+            for k in extras:
+                # 通过参数名定位并重新启用 requires_grad
+                try:
+                    param = base_model.transformer.get_parameter(k)
+                    param.requires_grad_(True)
+                except AttributeError:
+                    pass
+    else:
+        print(f"[lora_utils] no extras.pt found at {extras_path}", flush=True)
 
     print(f"[lora_utils] adapter loaded ← {path}", flush=True)
     return base_model

@@ -303,7 +303,7 @@ def main():
     # 续训
     resume_from = train_cfg.get("resume_from")
     if resume_from:
-        load_lora(accelerator.unwrap_model(model), resume_from)
+        load_lora(accelerator.unwrap_model(model), resume_from, trainable=True)
         log.info(f"Resumed from {resume_from}")
 
     eval_cfg   = cfg.get("eval", {})
@@ -383,10 +383,14 @@ def main():
             step += 1
 
     if accelerator.is_main_process:
-        save_checkpoint(accelerator.unwrap_model(model), output_dir, step)
+        raw = accelerator.unwrap_model(model)
+        save_checkpoint(raw, output_dir, step)
+        # 训练结束时额外保存一份 merged 版本（LoRA 已 bake 进权重，无需 PEFT 即可推理）
+        save_lora(raw, output_dir / "merged", merged=True)
+        log.info(f"Merged checkpoint saved → {output_dir / 'merged'}")
         if eval_cfg.get("samples_dir"):
             run_eval(
-                model           = accelerator.unwrap_model(model),
+                model           = raw,
                 tokenizer       = tokenizer,
                 samples_dir     = eval_cfg["samples_dir"],
                 output_dir      = output_dir,

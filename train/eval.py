@@ -83,6 +83,14 @@ def load_samples(samples_dir: Path, asr) -> list[tuple[Path, str]]:
     return items
 
 
+def _output_path(step_dir: Path, samples_dir: Path, wav_path: Path) -> Path:
+    """保留 wav_path 相对于 samples_dir 的路径，写到 step_dir 下。"""
+    rel = wav_path.relative_to(samples_dir)
+    out = step_dir / rel
+    out.parent.mkdir(parents=True, exist_ok=True)
+    return out
+
+
 # ── WER ───────────────────────────────────────────────────────────────────────
 
 def word_error_rate(hyp: str, ref: str) -> float:
@@ -143,7 +151,7 @@ def main() -> None:
     rows    = []          # 用于 step 目录内的 results.csv
     gen_text = args.gen_text
     for i, (wav_path, text) in enumerate(items):
-        out_path = output_dir / (wav_path.parent.name + ".wav")
+        out_path = _output_path(output_dir, samples_dir, wav_path)
         wav_np = infer_one(
             gen_text        = gen_text,
             prompt_text     = text,
@@ -215,8 +223,6 @@ def run_eval(
         writer          : SummaryWriter（传 None 则不写 TensorBoard）
         train_vae       : 与训练循环一致，决定 eval 后是否把 vae 恢复成 eval 模式
     """
-    import whisper
-
     if device is None:
         device = next(model.parameters()).device
 
@@ -232,7 +238,7 @@ def run_eval(
     wers = []
     try:
         for i, (wav_path, prompt_text) in enumerate(items):
-            out_path = step_dir / (wav_path.parent.name + ".wav")
+            out_path = _output_path(step_dir, samples_dir, wav_path)
             wav_np = infer_one(
                 gen_text        = gen_text,
                 prompt_text     = prompt_text,

@@ -93,7 +93,7 @@ components:
 
 # ─── 推理评估（每 save_every 步自动运行）────────────────────────────────────────
 eval:
-  samples_dir: "/workspace/LongCat-AudioDiT/audios/Clean"   # 递归搜索 *.wav 作为 prompt
+  samples_dir: "/workspace/LongCat-AudioDiT/audios"   # 递归搜索 *.wav 作为 prompt
   gen_text: "A gentle breeze blew across the open field as the sun began to set in the west."
   nfe: 16
   cfg_strength: 4.0
