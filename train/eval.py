@@ -23,7 +23,7 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
-import librosa
+import librosaC
 import numpy as np
 import soundfile as sf
 import torch
@@ -40,7 +40,7 @@ from transformers import AutoTokenizer
 from batch_inference import infer_one
 from lora_utils import load_lora
 
-BASE_MODEL_DIR = r"C:\Users\26446\Desktop\tts_eval\models\meituan-longcat\LongCat-AudioDiT-1B"
+BASE_MODEL_DIR = "meituan-longcat/LongCat-AudioDiT-1B"
 
 
 # ── sample loading ────────────────────────────────────────────────────────────

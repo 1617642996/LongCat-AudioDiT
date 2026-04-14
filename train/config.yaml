@@ -3,7 +3,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 model:
-  model_dir: "C:/Users/26446/Desktop/tts_eval/models/meituan-longcat/LongCat-AudioDiT-1B"
+  model_dir: "meituan-longcat/LongCat-AudioDiT-1B"
   dtype: "bfloat16"      # float32 | bfloat16
 
 data:
