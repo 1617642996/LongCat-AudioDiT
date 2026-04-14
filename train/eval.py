@@ -36,9 +36,25 @@ sys.path.insert(0, str(FINETUNE_DIR))
 
 import audiodit  # noqa: F401
 from audiodit import AudioDiTModel
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, pipeline as hf_pipeline
 from batch_inference import infer_one
 from lora_utils import load_lora
+
+
+class _ASRModel:
+    """Thin wrapper: transformers Whisper pipeline → whisper-style .transcribe() API."""
+
+    def __init__(self, model_name: str, device):
+        self._pipe = hf_pipeline(
+            "automatic-speech-recognition",
+            model=f"openai/whisper-{model_name}",
+            device=device,
+        )
+
+    def transcribe(self, audio, language=None) -> dict:
+        kw = {"language": language} if language else {}
+        result = self._pipe(audio, generate_kwargs=kw)
+        return {"text": result["text"]}
 
 BASE_MODEL_DIR = "meituan-longcat/LongCat-AudioDiT-1B"
 
@@ -112,8 +128,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(args.device)
 
-    import whisper
-    asr   = whisper.load_model(args.whisper_model, device=str(device))
+    asr   = _ASRModel(args.whisper_model, device)
     items = load_samples(samples_dir, asr)
 
     model = AudioDiTModel.from_pretrained(BASE_MODEL_DIR).to(device)
@@ -209,7 +224,7 @@ def run_eval(
     step_dir    = output_dir / f"step_{step:07d}"
     step_dir.mkdir(parents=True, exist_ok=True)
 
-    asr   = whisper.load_model(whisper_model_name, device=str(device))
+    asr   = _ASRModel(whisper_model_name, device)
     items = load_samples(samples_dir, asr)
 
     was_training = model.training

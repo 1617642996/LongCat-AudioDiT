@@ -32,16 +32,16 @@
   "rank_pattern": {},
   "revision": null,
   "target_modules": [
-    "cross_attn.to_k",
-    "self_attn.to_v",
-    "self_attn.to_q",
-    "ffn.ff.0",
-    "cross_attn.to_q",
-    "cross_attn.to_v",
     "cross_attn.to_out.0",
     "ffn.ff.3",
     "self_attn.to_k",
-    "self_attn.to_out.0"
+    "cross_attn.to_k",
+    "ffn.ff.0",
+    "self_attn.to_out.0",
+    "cross_attn.to_q",
+    "self_attn.to_v",
+    "cross_attn.to_v",
+    "self_attn.to_q"
   ],
   "target_parameters": null,
   "task_type": null,
