@@ -390,7 +390,8 @@ def main():
                 scheduler.step()
                 optimizer.zero_grad()
 
-            running_loss += loss.item() * grad_acc
+            loss_for_log = accelerator.reduce(loss.detach(), reduction="mean")
+            running_loss += loss_for_log.item() * grad_acc
 
             if accelerator.is_main_process:
                 if step == 0:

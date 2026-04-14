@@ -18,7 +18,8 @@ data:
   max_text_len: 512
 
 training:
-  resume_from: "./checkpoint/step_0000000"
+  # resume_from: "./checkpoint/step_0000000"
+  resume_from: null
   steps: 10000
   batch_size: 16
   gradient_accumulation: 1
@@ -63,25 +64,25 @@ components:
     mode: lora
 
   dit_adaln:
-    mode: full
+    mode: frozen
 
   text_conv:
-    mode: full
+    mode: frozen
 
   latent_embed:
-    mode: full
+    mode: frozen
 
   latent_cond_embedder:
-    mode: full
+    mode: frozen
 
   input_embed:
-    mode: full
+    mode: frozen
 
   output_proj:
-    mode: full
+    mode: frozen
 
   time_embed:
-    mode: full
+    mode: frozen
 
   # 文本编码器：通常冻结；跨域适配时可改 lora
   text_encoder:

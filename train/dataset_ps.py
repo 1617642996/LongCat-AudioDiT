@@ -19,8 +19,13 @@ import json
 import math
 import os
 import random
+import sys
 import tarfile
+from pathlib import Path
 from typing import Iterator, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utils import normalize_text
 
 import librosa
 import torch
@@ -215,7 +220,7 @@ class PsStreamDataset(IterableDataset):
 
         # ── 随机切 prompt 边界 ─────────────────────────────────────────────
         max_prompt = min(self.prompt_max, T // 2)
-        if max_prompt <= self.prompt_min:
+        if max_prompt < self.prompt_min:
             prompt_len = 0
         else:
             prompt_len = random.randint(self.prompt_min, max_prompt)
@@ -254,7 +259,7 @@ def ps_collate_fn(batch: list[dict], tokenizer=None, max_text_len: int = 512) ->
     }
     if tokenizer is not None:
         enc = tokenizer(
-            [x["text"] for x in batch],
+            [normalize_text(x["text"]) for x in batch],
             padding="longest",
             truncation=True,
             max_length=max_text_len,
