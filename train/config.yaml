@@ -8,7 +8,7 @@ model:
 
 data:
   hf_split: "train"
-  shard_frac: 1.0              # 使用全量 shard；调试时可设 0.01
+  shard_frac: 0.1              # 使用全量 shard；调试时可设 0.01
   wer_max: 0.3                 # 过滤转录质量差的样本（WER > 0.3 丢弃）
   sample_rate: 24000
   max_text_len: 512

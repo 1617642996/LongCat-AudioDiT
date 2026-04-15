@@ -164,6 +164,7 @@ cython_debug/
 # ── project-specific ──────────────────────────────────────────────────────────
 # 训练产物
 train/checkpoint/
+filter_inspect
 *.safetensors
 *.bin
 

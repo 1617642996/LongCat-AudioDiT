@@ -1,185 +1,204 @@
-# LongCat-AudioDiT: High-Fidelity Diffusion Text-to-Speech in the Waveform Latent Space
+# LongCat-AudioDiT Fine-tuning
 
-<div align="center">
-  <img src="assets/LongCat-AudioDiT.svg" width="45%" alt="LongCat-AudioDiT" />
-</div>
-<hr>
+基于 [LongCat-AudioDiT](https://github.com/meituan-longcat/LongCat-AudioDiT) 的 LoRA + 全量混合微调脚本，数据集为 [humanify/ps](https://huggingface.co/datasets/humanify/ps)（WebDataset tar 流式加载）。
 
-<div align="center" style="line-height: 1;">
-    <a href="https://arxiv.org/abs/2603.29339">
-    <img alt="Paper" src="https://img.shields.io/badge/arXiv-2603.29339-b31b1b.svg" style="display: inline-block; vertical-align: middle;"/>  
-    </a>
-    <a href="https://github.com/meituan-longcat/LongCat-AudioDiT" target="_blank" style="margin: 2px;">
-        <img alt="GitHub" src="https://img.shields.io/badge/GitHub-LongCatAudioDiT-white?logo=github&logoColor=white&color=a4b5d5" style="display: inline-block; vertical-align: middle;"/>
-    </a>
-        <a href="https://aria-k-alethia.github.io/LongCat-AudioDiT-demo" target="_blank" style="margin: 2px;">
-        <img alt="Demo" src="https://img.shields.io/badge/Demo-LongCatAudioDiT-white?logo=googleplay&logoColor=white&color=eabcdd" style="display: inline-block; vertical-align: middle;"/>
-    </a>
-</div>
-<div align="center" style="line-height: 1;">
-    <a href="https://huggingface.co/meituan-longcat/LongCat-AudioDiT-3.5B" target="_blank" style="margin: 2px;">
-        <img alt="Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-LongCatAudioDiT3.5B-ffc107?color=ffc107&logoColor=white" style="display: inline-block; vertical-align: middle;"/>
-    </a>
-    <a href="https://huggingface.co/meituan-longcat/LongCat-AudioDiT-1B" target="_blank" style="margin: 2px;">
-        <img alt="Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-LongCatAudioDiT1B-ffc107?color=ffc107&logoColor=white" style="display: inline-block; vertical-align: middle;"/>
-    </a>
-</div>
-<div align="center" style="line-height: 1;">
-  <a href="https://github.com/meituan-longcat/LongCat-AudioDiT/blob/main/assets/wechat_official_accounts.png" target="_blank" style="margin: 2px;">
-    <img alt="Wechat" src="https://img.shields.io/badge/WeChat-LongCat-brightgreen?logo=wechat&logoColor=white" style="display: inline-block; vertical-align: middle;"/>
-  </a>
-  <a href="https://x.com/Meituan_LongCat" target="_blank" style="margin: 2px;">
-    <img alt="Twitter Follow" src="https://img.shields.io/badge/Twitter-LongCat-white?logo=x&logoColor=white" style="display: inline-block; vertical-align: middle;"/>
-  </a>
-    <a href="https://github.com/meituan-longcat/LongCat-AudioDiT/blob/main/LICENSE" style="margin: 2px;">
-    <img alt="License" src="https://img.shields.io/badge/License-MIT-f5de53?&color=f5de53" style="display: inline-block; vertical-align: middle;"/>
-  </a>
-</div>
+## 文件结构
 
-## Introduction
+```
+train/
+├── train.py          # 主训练脚本（Accelerate + PEFT）
+├── config.yaml       # 所有超参（模型/数据/训练/LoRA/组件）
+├── dataset_ps.py     # 流式数据集（humanify/ps）
+├── lora_utils.py     # LoRA 注入、保存、加载、merge
+├── eval.py           # 推理评估 + WER 计算（每 save_every 步自动运行）
+├── inspect_filter.py # 音频过滤可视化工具（听 passed/filtered 样本）
+└── docs/
+    └── clipping_filter.md  # 削波过滤的原因和诊断过程
+```
 
-LongCat-AudioDiT is a state-of-the-art (SOTA) diffusion-based text-to-speech (TTS) model that directly operates in the waveform latent space.
-> **Abstract**: We present LongCat-TTS, a novel, non-autoregressive diffusion-based text-to-speech (TTS) model that achieves state-of-the-art (SOTA) performance.
-Unlike previous methods that rely on intermediate acoustic representations such as mel-spectrograms, the core innovation of LongCat-TTS lies in operating directly within the waveform latent space. This approach effectively mitigates compounding errors and drastically simplifies the TTS pipeline, requiring only a waveform variational autoencoder (Wav-VAE) and a diffusion backbone.
-Furthermore, we introduce two critical improvements to the inference process: first, we identify and rectify a long-standing training-inference mismatch; second, we replace traditional classifier-free guidance with adaptive projection guidance to elevate generation quality.
-Experimental results demonstrate that, despite the absence of complex multi-stage training pipelines or high-quality human-annotated datasets, LongCat-TTS achieves SOTA zero-shot voice cloning performance on the Seed benchmark while maintaining competitive intelligibility.
-Specifically, our largest variant, LongCat-TTS-3.5B, outperforms the previous SOTA model (Seed-TTS), improving the speaker similarity (SIM) scores from 0.809 to 0.818 on Seed-ZH, and from 0.776 to 0.797 on Seed-Hard.
-Finally, through comprehensive ablation studies and systematic analysis, we validate the effectiveness of our proposed modules.
-Notably, we investigate the interplay between the Wav-VAE and the TTS backbone, revealing the counterintuitive finding that superior reconstruction fidelity in the Wav-VAE does not necessarily lead to better overall TTS performance.
-Code and model weights are released to foster further research within the speech community.
+## 快速开始
 
-![image](assets/architecture.png)
-
-This repository provides the HuggingFace-compatible implementation, including model definition, weight conversion, and inference scripts.
-
-## Experimental Results on Seed Benchmark
-LongCat-AudioDiT obtains state-of-the-art (SOTA) voice cloning performance on the Seed-benchmark, surpassing both close-source and open-source modles.
-
-| **Model** | **ZH CER (%)** ↓ | **ZH SIM** ↑ | **EN WER (%)** ↓ | **EN SIM** ↑ | **ZH-Hard CER (%)** ↓ | **ZH-Hard SIM** ↑ |
-|:---|:---:|:---:|:---:|:---:|:---:|:---:|
-| GT | 1.26 | 0.755 | 2.14 | 0.734 | - | - |
-| Seed-DiT | 1.18 | 0.809 | 1.73 | **0.790** | - | - |
-| MaskGCT | 2.27 | 0.774 | 2.62 | 0.714 | 10.27 | 0.748 |
-| E2 TTS | 1.97 | 0.730 | 2.19 | 0.710 | - | - |
-| F5 TTS | 1.56 | 0.741 | 1.83 | 0.647 | 8.67 | 0.713 |
-| F5R-TTS | 1.37 | 0.754 | - | - | 8.79 | 0.718 |
-| ZipVoice | 1.40 | 0.751 | 1.64 | 0.668 | - | - |
-| Seed-ICL | 1.12 | 0.796 | 2.25 | 0.762 | 7.59 | 0.776 |
-| SparkTTS | 1.20 | 0.672 | 1.98 | 0.584 | - | - |
-| FireRedTTS | 1.51 | 0.635 | 3.82 | 0.460 | 17.45 | 0.621 |
-| Qwen2.5-Omni | 1.70 | 0.752 | 2.72 | 0.632 | 7.97 | 0.747 |
-| Qwen2.5-Omni_RL | 1.42 | 0.754 | 2.33 | 0.641 | 6.54 | 0.752 |
-| CosyVoice | 3.63 | 0.723 | 4.29 | 0.609 | 11.75 | 0.709 |
-| CosyVoice2 | 1.45 | 0.748 | 2.57 | 0.652 | 6.83 | 0.724 |
-| FireRedTTS-1S | 1.05 | 0.750 | 2.17 | 0.660 | 7.63 | 0.748 |
-| CosyVoice3-1.5B | 1.12 | 0.781 | 2.21 | 0.720 | *5.83* | 0.758 |
-| IndexTTS2 | 1.03 | 0.765 | 2.23 | 0.706 | 7.12 | 0.755 |
-| DiTAR | 1.02 | 0.753 | 1.69 | 0.735 | - | - |
-| MiniMax-Speech | 0.99 | 0.799 | 1.90 | 0.738 | - | - |
-| VoxCPM | *0.93* | 0.772 | 1.85 | 0.729 | 8.87 | 0.730 |
-| MOSS-TTS | 1.20 | 0.788 | 1.85 | 0.734 | - | - |
-| Qwen3-TTS | 1.22 | 0.770 | **1.23** | 0.717 | 6.76 | 0.748 |
-| CosyVoice3.5 | **0.87** | 0.797 | 1.57 | 0.738 | **5.71** | 0.786 |
-| LongCat-AudioDiT-1B | 1.18 | *0.812* | 1.78 | 0.762 | 6.33 | *0.787* |
-| LongCat-AudioDiT-3.5B | 1.09 | **0.818** | *1.50* | *0.786* | 6.04 | **0.797** |
-
-*Notes*:
-
-1. Results of MOSS-TTS are from [MOSS-TTS](https://github.com/OpenMOSS/MOSS-TTS)
-2. Results of CosyVoice3.5 are from [CosyVoice3.5](https://mp.weixin.qq.com/s/sTNC7bVphs9zofly3lBoUQ)
-
-## Installation
+### 1. 安装依赖
 
 ```bash
 pip install -r requirements.txt
+pip install peft accelerate soundfile jiwer
 ```
 
-## CLI Inference
+### 2. 配置
+
+编辑 `config.yaml`，关键字段：
+
+```yaml
+model:
+  model_dir: "meituan-longcat/LongCat-AudioDiT-1B"  # 或本地路径
+
+training:
+  steps: 10000
+  batch_size: 16          # 单卡 batch，总 batch = batch_size × num_processes
+  learning_rate: 1.0e-4
+  output_dir: "./checkpoint"
+
+lora:
+  r: 32
+  alpha: 32
+```
+
+### 3. 启动训练
 
 ```bash
-# TTS
-python inference.py --text "今天晴暖转阴雨，空气质量优至良，空气相对湿度较低。" --output_audio output.wav --model_dir meituan-longcat/LongCat-AudioDiT-1B
-
-# Voice cloning
-python inference.py \
-    --text "今天晴暖转阴雨，空气质量优至良，空气相对湿度较低。" \
-    --prompt_text "小偷却一点也不气馁，继续在抽屉里翻找。" \
-    --prompt_audio assets/prompt.wav \
-    --output_audio output.wav \
-    --model_dir meituan-longcat/LongCat-AudioDiT-1B \
-    --guidance_method apg
-
-# Batch inference (SeedTTS eval format, one item per line: uid|prompt_text|prompt_wav_path|gen_text)
-python batch_inference.py \
-    --lst /path/to/meta.lst \
-    --output_dir /path/to/output \
-    --model_dir meituan-longcat/LongCat-AudioDiT-1B \
-    --guidance_method apg
+accelerate launch --num_processes 4 train/train.py --config train/config.yaml
 ```
 
-## Inference (Python API)
+单卡调试：
 
-### 1. TTS
+```bash
+accelerate launch --num_processes 1 train/train.py --config train/config.yaml
+```
+
+## 训练机制
+
+### Conditional Flow Matching (CFM)
+
+每个样本被随机切成 **prompt 区**（声纹参考）和 **gen 区**（训练目标）：
+
+- `t ~ Uniform(0, 1)` 采样扩散时刻
+- `x_t = (1-t) * z0 + t * z1`，其中 `z0 ~ N(0,I)`，`z1` = VAE 编码的干净 latent
+- loss = gen 区的 `MSE(v_pred, z1 - z0)`
+
+### CFG Dropout
+
+训练时各自以 10% 概率丢弃文本条件或参考音频条件，使模型支持推理时的 classifier-free guidance：
+
+| 丢弃情况 | 概率 |
+|---|---|
+| 保留两者 | 81% |
+| 仅丢弃文本 | 9% |
+| 仅丢弃 prompt | 9% |
+| 两者都丢弃 | 1% |
+
+### Prompt/Gen 切分
+
+按比例随机切（`prompt_frac_lo ~ prompt_frac_hi`），再由 `prompt_min/max_sec` 和 `min_gen_sec` 约束，最终向下对齐到 `full_hop=2048`（VAE 下采样步长）：
+
+```
+T = 14s 时的典型分布：
+  prompt: 2.8s ~ 9.8s（均匀）
+  gen:    4.2s ~ 11.2s
+```
+
+## 可训练组件
+
+在 `config.yaml` 的 `components` 段控制每个组件的训练模式：
+
+| 组件 | 参数量 | 可选模式 |
+|---|---|---|
+| `dit_attn` | ~600M | `lora` / `full` / `frozen` |
+| `dit_ffn` | ~340M | `lora` / `full` / `frozen` |
+| `dit_adaln` | ~50M | `full` / `frozen` |
+| `text_conv` | ~9M | `full` / `frozen` |
+| `latent_embed` | ~9M | `full` / `frozen` |
+| `latent_cond_embedder` | ~18M | `full` / `frozen` |
+| `input_embed` | ~5M | `full` / `frozen` |
+| `output_proj` | ~9M | `full` / `frozen` |
+| `time_embed` | ~2M | `full` / `frozen` |
+| `text_encoder` | — | `lora` / `frozen` |
+| `vae` | — | `frozen`（不建议修改） |
+
+**推荐配置**（底噪/音色适配）：
+
+```yaml
+components:
+  dit_attn:   { mode: lora }   # 核心注意力，LoRA 省显存
+  dit_ffn:    { mode: lora }   # 特征变换
+  dit_adaln:  { mode: full }   # 参数小，full 效果更稳
+  latent_embed:         { mode: full }  # 读 prompt latent 的关键路径
+  latent_cond_embedder: { mode: full }
+  # 其余 frozen
+```
+
+## 数据过滤
+
+### 削波过滤（clip_peak_threshold）
+
+humanify/ps 中约 5-15% 的样本存在**数字削波**（法庭录音为主），会导致 WavVAE latent 能量异常（‖z‖² 比正常大 40-80×），FM loss 飙到 15-19。
+
+过滤条件：`peak = wav.abs().max() >= 0.99` → 丢弃。
+
+效果：50-batch loss 分布 `mean 3.91 → 1.20`，`std 4.60 → 0.54`。
+
+详见 [`docs/clipping_filter.md`](docs/clipping_filter.md)。
+
+### 其他过滤条件
+
+| 参数 | 默认值 | 作用 |
+|---|---|---|
+| `wer_max` | 0.3 | 丢弃转录质量差的样本 |
+| `min_audio_sec` | 4.0 | 太短无法切出 prompt + gen |
+| `max_audio_sec` | 20.0 | 超长音频截断 |
+| `min_text_tokens` | 8 | 异常短文本丢弃 |
+
+## Checkpoint 格式
+
+每个 checkpoint 目录包含：
+
+```
+checkpoint/step_XXXXXXX/
+├── adapter_config.json       # LoRA 配置（PEFT 标准格式）
+├── adapter_model.safetensors # LoRA A/B 矩阵
+└── extras.pt                 # 全量微调参数（adaln、proj_out 等）
+```
+
+### 加载 checkpoint 推理
+
 ```python
-import audiodit  # auto-registers with transformers
 from audiodit import AudioDiTModel
-from transformers import AutoTokenizer
-import torch, soundfile as sf
+from train.lora_utils import load_lora
 
-# Load model
-model = AudioDiTModel.from_pretrained("meituan-longcat/LongCat-AudioDiT-1B").to("cuda")
-model.vae.to_half()  # VAE runs in fp16 (matching original)
+model = AudioDiTModel.from_pretrained("meituan-longcat/LongCat-AudioDiT-1B")
+model = load_lora(model, "train/checkpoint/step_0005000")
 model.eval()
-
-tokenizer = AutoTokenizer.from_pretrained(model.config.text_encoder_model)
-
-# Zero-shot synthesis
-inputs = tokenizer(["今天晴暖转阴雨，空气质量优至良，空气相对湿度较低。"], padding="longest", return_tensors="pt")
-output = model(
-    input_ids=inputs.input_ids,
-    attention_mask=inputs.attention_mask,
-    duration=62,  # latent frames
-    steps=16,
-    cfg_strength=4.0,
-    guidance_method="cfg",  # or "apg"
-)
-sf.write("output.wav", output.waveform.squeeze().cpu().numpy(), 24000)
 ```
 
-### 2. Voice Cloning (with prompt audio)
+### 合并 LoRA 权重导出
 
 ```python
-import librosa, torch
+from train.lora_utils import merge_and_unload
 
-# Load prompt audio
-audio, _ = librosa.load("assets/prompt.wav", sr=24000, mono=True)
-prompt_wav = torch.from_numpy(audio).unsqueeze(0).unsqueeze(0)  # (1, 1, T)
-
-# Concatenate prompt_text + gen_text for the text encoder
-prompt_text = "小偷却一点也不气馁，继续在抽屉里翻找。"
-gen_text = "今天晴暖转阴雨，空气质量优至良，空气相对湿度较低。"
-inputs = tokenizer([f"{prompt_text} {gen_text}"], padding="longest", return_tensors="pt")
-
-output = model(
-    input_ids=inputs.input_ids,
-    attention_mask=inputs.attention_mask,
-    prompt_audio=prompt_wav,
-    duration=138,  # prompt_frames + gen_frames
-    steps=16,
-    cfg_strength=4.0,
-    guidance_method="apg",
-)
+merged = merge_and_unload(model)  # 返回普通 AudioDiTModel，无 PEFT 依赖
 ```
 
-## License Agreement
-This repository, including both the model weights and the source code, is released under the **MIT License**.
+### 恢复训练
 
-Any contributions to this repository are licensed under the MIT License, unless otherwise stated. This license does not grant any rights to use Meituan trademarks or patents.
+```yaml
+# config.yaml
+training:
+  resume_from: "./checkpoint/step_0005000"
+```
 
-For details, see the [LICENSE](./LICENSE) file.
+## 评估
 
-## Contact
-Please contact us at <a href="mailto:longcat-team@meituan.com">longcat-team@meituan.com</a> or open an issue if you have any questions.
+每 `save_every` 步自动对 `eval.samples_dir` 下的 `.wav` 文件做推理并计算 WER。
 
-#### WeChat Group
-<img src=./assets/longcat_wechat_group.jpeg width="200px">
+手动运行：
+
+```bash
+python train/eval.py --step 5000 \
+    --checkpoint_dir train/checkpoint/step_0005000 \
+    --samples_dir /path/to/wavs
+```
+
+## 工具
+
+### 检查过滤效果
+
+```bash
+# 拉取样本，分别保存 passed/filtered 到 ./filter_inspect/
+python train/inspect_filter.py --n_passed 10 --n_filtered 10 --shard_frac 0.05
+```
+
+### TensorBoard
+
+```bash
+tensorboard --logdir train/checkpoint/tb
+```
