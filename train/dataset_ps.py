@@ -49,10 +49,24 @@ def _stem_ext(name: str) -> Tuple[str, str]:
     return name[:dot], name[dot:].lower()
 
 
-def _decode_audio(data: bytes, sr: int) -> Optional[torch.Tensor]:
+def _decode_audio(data: bytes, sr: int, clip_peak_threshold: float = 0.99) -> Optional[torch.Tensor]:
+    """
+    解码音频并过滤 clipped 样本。
+
+    humanify/ps 内有一批样本存储时已发生数字削波（peak = 1.0 的硬平顶），
+    其谐波畸变使非因果 WavVAE 编出来的 latent 能量比正常大 30-80×，
+    直接导致 FM loss 飙到 15-19（正常 ~1）。裁剪失真是不可逆的，
+    单纯 amplitude 归一化也修不回来 —— 只能在数据入口丢弃。
+
+    正常录音留有 headroom，peak < 0.95；peak ≥ 0.99 几乎 100% 来自 clipping。
+    """
     try:
         audio, _ = librosa.load(io.BytesIO(data), sr=sr, mono=True)
-        return torch.from_numpy(audio).unsqueeze(0)  # [1, T]
+        wav = torch.from_numpy(audio).unsqueeze(0)  # [1, T]
+        peak = wav.abs().max().item()
+        if peak >= clip_peak_threshold:
+            return None   # 丢弃 clipped 样本
+        return wav
     except Exception:
         return None
 
@@ -86,8 +100,14 @@ class PsStreamDataset(IterableDataset):
         sample_rate: int = SAMPLE_RATE,
         min_audio_sec: float = 4.0,
         max_audio_sec: float = 20.0,
-        prompt_min_sec: float = 2.0,
+        prompt_min_sec: float = 1.0,
         prompt_max_sec: float = 8.0,
+        min_gen_sec: float = 1.5,
+        prompt_frac_lo: float = 0.15,
+        prompt_frac_hi: float = 0.75,
+        full_hop: int = 2048,
+        min_text_tokens: int = 8,
+        clip_peak_threshold: float = 0.99,
         wer_max: Optional[float] = None,
         hf_token: Optional[str] = None,
     ):
@@ -102,6 +122,12 @@ class PsStreamDataset(IterableDataset):
         self.max_samples    = int(max_audio_sec  * sample_rate)
         self.prompt_min     = int(prompt_min_sec * sample_rate)
         self.prompt_max     = int(prompt_max_sec * sample_rate)
+        self.min_gen        = int(min_gen_sec    * sample_rate)
+        self.prompt_frac_lo = prompt_frac_lo
+        self.prompt_frac_hi = prompt_frac_hi
+        self.full_hop       = full_hop
+        self.min_text_tokens = min_text_tokens   # 按字符数近似过滤，tokenizer 未知时的粗略 proxy
+        self.clip_peak_threshold = clip_peak_threshold
         self.wer_max        = wer_max
         self.hf_token       = hf_token or os.environ.get("HF_TOKEN")
 
@@ -198,6 +224,9 @@ class PsStreamDataset(IterableDataset):
                 break
         if not text:
             return None
+        # 过滤异常短文本（按去空格字符数近似）
+        if len(text.replace(" ", "")) < self.min_text_tokens:
+            return None
 
         # ── WER 过滤 ───────────────────────────────────────────────────────
         if self.wer_max is not None:
@@ -206,7 +235,7 @@ class PsStreamDataset(IterableDataset):
                 return None
 
         # ── 音频解码 ───────────────────────────────────────────────────────
-        wav = _decode_audio(audio_bytes, self.sample_rate)
+        wav = _decode_audio(audio_bytes, self.sample_rate, self.clip_peak_threshold)
         if wav is None:
             return None
 
@@ -218,12 +247,28 @@ class PsStreamDataset(IterableDataset):
             wav = wav[:, :self.max_samples]
             T   = self.max_samples
 
-        # ── 随机切 prompt 边界 ─────────────────────────────────────────────
-        max_prompt = min(self.prompt_max, T // 2)
-        if max_prompt < self.prompt_min:
-            prompt_len = 0
-        else:
-            prompt_len = random.randint(self.prompt_min, max_prompt)
+        # ── 按"比例"随机切 prompt 边界 ────────────────────────────────────
+        # 核心差异：不按绝对秒数（会让短音频固定 prompt=T/2、长音频 gen 主导），
+        # 而是按 prompt_frac_lo~prompt_frac_hi 的比例采样，所有长度的样本
+        # prompt/gen 比例分布一致，gen 区帧数方差大幅下降 → loss std 下降。
+        #
+        # 约束：
+        #   - prompt >= prompt_min（声纹有足够 reference）
+        #   - gen    >= min_gen  （避免单 batch gen 帧数过少导致 MSE 方差炸）
+        #   - 对齐到 full_hop（cfm_step 里 T_p = prompt_len // full_hop，不丢帧）
+        frac       = random.uniform(self.prompt_frac_lo, self.prompt_frac_hi)
+        prompt_len = int(T * frac)
+
+        max_prompt_by_gen = T - self.min_gen                 # 给 gen 留至少 min_gen
+        prompt_len = min(prompt_len, max_prompt_by_gen, self.prompt_max)
+        prompt_len = max(prompt_len, self.prompt_min)
+
+        if prompt_len >= T - self.min_gen or prompt_len < self.prompt_min:
+            # 音频太短，容不下 prompt_min + min_gen → 丢弃，不再退化成 prompt=0
+            return None
+
+        # 对齐到 full_hop（向下，避免跨帧）
+        prompt_len = (prompt_len // self.full_hop) * self.full_hop
 
         return {"wav": wav, "text": text, "prompt_len": prompt_len}
 

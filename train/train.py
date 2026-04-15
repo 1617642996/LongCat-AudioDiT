@@ -113,7 +113,8 @@ def cfm_step(
     device: torch.device,
     dtype: torch.dtype,
     train_vae: bool = False,
-) -> torch.Tensor:
+    return_stats: bool = False,
+):
     """
     单步 CFM 训练，返回标量 loss。
 
@@ -152,8 +153,10 @@ def cfm_step(
     )                                                                   # [B, T_total, 64]
 
     # 2. 采样 z0 和 t
+    #    用 uniform 匹配 base model 训练分布（Rectified Flow 原论文默认）。
+    #    推理侧 t = linspace(0, 1, steps) 也是 uniform，训练分布与推理采样对齐。
     z0   = torch.randn_like(z1)                                # [B, T_total, 64]
-    t    = torch.rand(B, device=device, dtype=torch.float32)   # [B]
+    t    = torch.rand(B, device=device, dtype=torch.float32)   # [B] uniform
     t_bc = t[:, None, None]                                    # [B, 1, 1]
 
     # 3. Noisy Latent: x_t = (1-t)*z0 + t*z1
@@ -176,6 +179,20 @@ def cfm_step(
     audio_mask = lens_to_mask(T_lat, T_total)                  # [B, T_total]
     text_mask  = lens_to_mask(text_len, text_emb.shape[1])     # [B, S]
 
+    # 7.5 CFG dropout —— 关键：训练时以 10% 概率各自丢弃 text / prompt，
+    #     使模型学会无条件分支，对齐推理侧 cfg_strength=4.0 的 CFG 机制。
+    #     不做这个的话，推理 CFG 相减的"无条件分支"从未被训练过 → 推理输出会崩。
+    #     与 inference 侧一致：text 丢弃 = text_emb 置零 + text_mask 置 False；
+    #                         prompt 丢弃 = latent_cond 置零。
+    #     返回 stats 时（诊断模式）不做 dropout，以获得稳定的 loss 分布测量。
+    if not return_stats:
+        drop_text   = (torch.rand(B, device=device) < 0.1)      # [B]
+        drop_prompt = (torch.rand(B, device=device) < 0.1)      # [B]
+        # 独立丢弃（F5-TTS 惯例）；若某样本两者都被丢，就是 unconditional 全丢
+        text_emb    = text_emb    * (~drop_text  ).view(B, 1, 1).to(text_emb.dtype)
+        text_mask   = text_mask   & (~drop_text  ).view(B, 1)
+        latent_cond = latent_cond * (~drop_prompt).view(B, 1, 1).to(latent_cond.dtype)
+
     # 8. Transformer forward
     output = raw.transformer(
         x=x_t.to(dtype),
@@ -194,6 +211,21 @@ def cfm_step(
         v_pred[gen_mask].reshape(-1, z1.shape[-1]),
         v_target[gen_mask].reshape(-1, z1.shape[-1]),
     )
+    if return_stats:
+        # 逐样本统计，用于诊断 loss 高是否被 z1 的尺度/方差主导
+        z1_sq       = (z1 * z1).sum(dim=-1)              # [B, T_total] 每帧 ||z1||²
+        gen_mask_f  = gen_mask.float()
+        gen_frames  = gen_mask_f.sum(dim=1).clamp(min=1) # [B]
+        z1_norm2    = (z1_sq * gen_mask_f).sum(dim=1) / gen_frames   # 每样本 mean ||z1||² over gen
+        vt_sq       = (v_target * v_target).sum(dim=-1)  # [B, T_total]
+        vt_norm2    = (vt_sq * gen_mask_f).sum(dim=1) / gen_frames   # 每样本 mean ||v_target||²
+        stats = {
+            "z1_norm2_per_sample":       z1_norm2.detach().cpu(),
+            "v_target_norm2_per_sample": vt_norm2.detach().cpu(),
+            "gen_frames_per_sample":     gen_frames.detach().cpu(),
+            "t_per_sample":              t.detach().cpu(),
+        }
+        return loss, stats
     return loss
 
 
@@ -271,16 +303,21 @@ def main():
 
     # 数据
     dataset = PsStreamDataset(
-        split          = data_cfg.get("hf_split", "train"),
-        shard_frac     = data_cfg.get("shard_frac", 1.0) / accelerator.num_processes,
-        shard_offset   = accelerator.process_index,
-        sample_rate    = data_cfg.get("sample_rate", 24000),
-        min_audio_sec  = data_cfg.get("min_audio_sec", 4.0),
-        max_audio_sec  = data_cfg.get("max_audio_sec", 20.0),
-        prompt_min_sec = data_cfg.get("prompt_min_sec", 2.0),
-        prompt_max_sec = data_cfg.get("prompt_max_sec", 8.0),
-        wer_max        = data_cfg.get("wer_max", None),
-        seed           = train_cfg.get("seed", 42),
+        split               = data_cfg.get("hf_split", "train"),
+        shard_frac          = data_cfg.get("shard_frac", 1.0) / accelerator.num_processes,
+        shard_offset        = accelerator.process_index,
+        sample_rate         = data_cfg.get("sample_rate", 24000),
+        min_audio_sec       = data_cfg.get("min_audio_sec", 4.0),
+        max_audio_sec       = data_cfg.get("max_audio_sec", 20.0),
+        prompt_min_sec      = data_cfg.get("prompt_min_sec", 1.0),
+        prompt_max_sec      = data_cfg.get("prompt_max_sec", 8.0),
+        min_gen_sec         = data_cfg.get("min_gen_sec",    1.5),
+        prompt_frac_lo      = data_cfg.get("prompt_frac_lo", 0.15),
+        prompt_frac_hi      = data_cfg.get("prompt_frac_hi", 0.75),
+        min_text_tokens     = data_cfg.get("min_text_tokens", 8),
+        clip_peak_threshold = data_cfg.get("clip_peak_threshold", 0.99),
+        wer_max             = data_cfg.get("wer_max", None),
+        seed                = train_cfg.get("seed", 42),
     )
     dl = DataLoader(
         dataset,
@@ -343,6 +380,153 @@ def main():
     step         = resume_step
     running_loss = 0.0
     optimizer.zero_grad()
+
+    # ─── base model loss 分布诊断（不更新参数）────────────────────────────────
+    # 跑 N 个 batch 看 base model 的 loss 分布，用于判断训练 loss 趋势是否正常。
+    # 受 train_cfg["diag_batches"] 控制。默认 0（跳过诊断，直接训练）。
+    # 需要重新诊断时在 config.yaml 的 training: 下加 `diag_batches: 50`。
+    diag_batches = train_cfg.get("diag_batches", 0)
+    if diag_batches > 0 and resume_step == 0:
+        if accelerator.is_main_process:
+            # Tokenizer / text encoder 基本信息
+            raw_for_diag = accelerator.unwrap_model(model)
+            te_name = raw_for_diag.config.text_encoder_model
+            unk_id  = getattr(tokenizer, "unk_token_id", None)
+            unk_tok = getattr(tokenizer, "unk_token", None)
+            log.info(f"=== text encoder: {te_name} ===")
+            log.info(f"    tokenizer={type(tokenizer).__name__}  vocab={tokenizer.vocab_size}  "
+                     f"unk_token={unk_tok!r}(id={unk_id})")
+
+            log.info(f"=== base model loss distribution (no updates, {diag_batches} batches) ===")
+        diag_losses = []
+        diag_meta: list[dict] = []  # 记录每 batch 的文本/token 信息，用于挑出最差样本
+        diag_iter = iter(dl)
+        model.eval()
+        for i in range(diag_batches):
+            try:
+                batch = next(diag_iter)
+            except StopIteration:
+                break
+            with torch.no_grad():
+                with torch.autocast(device_type=device.type, dtype=dtype, enabled=use_amp):
+                    loss, stats = cfm_step(
+                        model=model,
+                        wav=batch["wav"],
+                        wav_lens_samples=batch["wav_lens"],
+                        prompt_lens_samples=batch["prompt_lens"],
+                        input_ids=batch["input_ids"],
+                        attention_mask=batch["attention_mask"],
+                        device=device,
+                        dtype=dtype,
+                        train_vae=train_vae,
+                        return_stats=False,
+                    )
+            loss_reduced = accelerator.reduce(loss.detach(), reduction="mean")
+            diag_losses.append(loss_reduced.item())
+
+            # 记录 token 统计 & 首样本文本（仅 main_process）
+            if accelerator.is_main_process:
+                ids   = batch["input_ids"]       # [B, S]
+                amask = batch["attention_mask"]  # [B, S]
+                tok_lens = amask.sum(dim=1)      # [B]  每样本实际 token 数
+                # 音频幅度统计（按实际长度 trim 后取 peak / RMS）
+                wav_b = batch["wav"]             # [B, 1, T_max]
+                wav_lens_b = batch["wav_lens"]   # [B]
+                peaks, rmss = [], []
+                for bi_ in range(wav_b.shape[0]):
+                    w = wav_b[bi_, 0, : int(wav_lens_b[bi_].item())]
+                    peaks.append(w.abs().max().item())
+                    rmss.append(w.pow(2).mean().sqrt().item())
+                peak_mean = sum(peaks) / len(peaks)
+                peak_max  = max(peaks)
+                rms_mean  = sum(rmss) / len(rmss)
+                rms_max   = max(rmss)
+                if unk_id is not None:
+                    unk_per_sample = ((ids == unk_id) & amask.bool()).sum(dim=1)  # [B]
+                    unk_total = int(unk_per_sample.sum().item())
+                    tok_total = int(tok_lens.sum().item())
+                    unk_ratio = unk_total / max(tok_total, 1)
+                else:
+                    unk_ratio = 0.0
+                first_ids = ids[0, : int(tok_lens[0].item())].tolist()
+                first_txt = tokenizer.decode(first_ids, skip_special_tokens=False)
+                z1n  = stats["z1_norm2_per_sample"]        # [B]
+                vtn  = stats["v_target_norm2_per_sample"]  # [B]
+                tps  = stats["t_per_sample"]               # [B]
+                diag_meta.append({
+                    "loss":         loss_reduced.item(),
+                    "tok_len_mean": float(tok_lens.float().mean().item()),
+                    "tok_len_max":  int(tok_lens.max().item()),
+                    "unk_ratio":    unk_ratio,
+                    "first_text":   first_txt,
+                    "wav_sec_mean": float(batch["wav_lens"].float().mean().item()) / 24000.0,
+                    "z1_norm2_mean":  float(z1n.mean().item()),
+                    "z1_norm2_max":   float(z1n.max().item()),
+                    "vt_norm2_mean":  float(vtn.mean().item()),
+                    "vt_norm2_max":   float(vtn.max().item()),
+                    "t_mean":         float(tps.mean().item()),
+                    "t_min":          float(tps.min().item()),
+                    "t_max":          float(tps.max().item()),
+                    "peak_mean":      peak_mean,
+                    "peak_max":       peak_max,
+                    "rms_mean":       rms_mean,
+                    "rms_max":        rms_max,
+                })
+
+            if accelerator.is_main_process and (i + 1) % 10 == 0:
+                log.info(f"  diag batch {i+1}/{diag_batches}  loss={loss_reduced.item():.4f}")
+        if accelerator.is_main_process and diag_losses:
+            import statistics
+            xs = sorted(diag_losses)
+            mean   = sum(xs) / len(xs)
+            median = xs[len(xs) // 2]
+            std    = statistics.pstdev(xs) if len(xs) > 1 else 0.0
+            log.info(
+                f"=== base loss: n={len(xs)}  mean={mean:.3f}  median={median:.3f}  "
+                f"std={std:.3f}  min={xs[0]:.3f}  max={xs[-1]:.3f}  "
+                f"p10={xs[len(xs)//10]:.3f}  p90={xs[len(xs)*9//10]:.3f} ==="
+            )
+
+            # 挑出最差 5 个 batch，dump 文本 + token 统计 + latent 统计
+            log.info("=== top-5 worst batches (loss / z1 / v_target / t stats) ===")
+            worst = sorted(enumerate(diag_meta), key=lambda kv: -kv[1]["loss"])[:5]
+            for rank, (bi, m) in enumerate(worst, 1):
+                log.info(
+                    f"  #{rank}  batch_idx={bi}  loss={m['loss']:.3f}  "
+                    f"‖z1‖²(mean/max)={m['z1_norm2_mean']:.2f}/{m['z1_norm2_max']:.2f}  "
+                    f"‖vt‖²(mean/max)={m['vt_norm2_mean']:.2f}/{m['vt_norm2_max']:.2f}  "
+                    f"t(mean/min/max)={m['t_mean']:.3f}/{m['t_min']:.3f}/{m['t_max']:.3f}"
+                )
+                log.info(
+                    f"         tok(mean/max)={m['tok_len_mean']:.1f}/{m['tok_len_max']}  "
+                    f"unk={m['unk_ratio']:.3f}  wav≈{m['wav_sec_mean']:.1f}s  "
+                    f"peak(mean/max)={m['peak_mean']:.3f}/{m['peak_max']:.3f}  "
+                    f"rms(mean/max)={m['rms_mean']:.4f}/{m['rms_max']:.4f}"
+                )
+                log.info(f"         text[0]: {m['first_text'][:140]!r}")
+
+            log.info("=== top-3 best batches (for comparison) ===")
+            best = sorted(enumerate(diag_meta), key=lambda kv: kv[1]["loss"])[:3]
+            for rank, (bi, m) in enumerate(best, 1):
+                log.info(
+                    f"  #{rank}  batch_idx={bi}  loss={m['loss']:.3f}  "
+                    f"‖z1‖²(mean/max)={m['z1_norm2_mean']:.2f}/{m['z1_norm2_max']:.2f}  "
+                    f"‖vt‖²(mean/max)={m['vt_norm2_mean']:.2f}/{m['vt_norm2_max']:.2f}  "
+                    f"t(mean/min/max)={m['t_mean']:.3f}/{m['t_min']:.3f}/{m['t_max']:.3f}"
+                )
+                log.info(
+                    f"         tok(mean/max)={m['tok_len_mean']:.1f}/{m['tok_len_max']}  "
+                    f"unk={m['unk_ratio']:.3f}  wav≈{m['wav_sec_mean']:.1f}s  "
+                    f"peak(mean/max)={m['peak_mean']:.3f}/{m['peak_max']:.3f}  "
+                    f"rms(mean/max)={m['rms_mean']:.4f}/{m['rms_max']:.4f}"
+                )
+                log.info(f"         text[0]: {m['first_text'][:140]!r}")
+
+        model.train()
+        raw_for_eval = accelerator.unwrap_model(model)
+        if not train_vae:
+            raw_for_eval.vae.eval()
+        raw_for_eval.text_encoder.eval()
 
     # step=0：在任何梯度更新之前保存基座 checkpoint 并做 eval（续训时跳过）
     # if step == 0 and accelerator.is_main_process:

@@ -4,7 +4,13 @@ import torch
 
 def load_audio(wavpath, sr):
     audio, _ = librosa.load(wavpath, sr=sr, mono=True)
-    return torch.from_numpy(audio).unsqueeze(0)
+    wav = torch.from_numpy(audio).unsqueeze(0)
+    # Peak safe-normalize：仅当 |wav| > 1 时按 peak 缩放到 1。训练侧同步处理
+    # （见 train/dataset_ps.py::_decode_audio），保证推理/训练面对一致的 VAE 输入。
+    peak = wav.abs().max().item()
+    if peak > 1.0:
+        wav = wav / peak
+    return wav
 
 def normalize_text(text):
     text = text.lower()

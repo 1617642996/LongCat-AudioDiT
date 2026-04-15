@@ -8,14 +8,27 @@ model:
 
 data:
   hf_split: "train"
-  shard_frac: 1.0       # 使用全量 shard；调试时可设 0.01
-  wer_max: 0.3          # 过滤转录质量差的样本（WER > 0.3 丢弃）
-  min_audio_sec: 4.0    # 太短无法切出 prompt 区
-  max_audio_sec: 20.0
-  prompt_min_sec: 2.0
-  prompt_max_sec: 8.0
+  shard_frac: 1.0              # 使用全量 shard；调试时可设 0.01
+  wer_max: 0.3                 # 过滤转录质量差的样本（WER > 0.3 丢弃）
   sample_rate: 24000
   max_text_len: 512
+
+  # ─── 音频长度过滤 ────────────────────────────────────────────────────────────
+  min_audio_sec: 4.0           # 太短无法切出 prompt 区 + min_gen 区
+  max_audio_sec: 20.0          # 超过的截断
+
+  # ─── prompt/gen 切分 ────────────────────────────────────────────────────────
+  # 按比例切（frac_lo ~ frac_hi 内均匀采样），再被 prompt_min/max_sec 和 min_gen_sec
+  # 约束；最终向下对齐到 full_hop (2048 采样点 = 1 latent 帧)。
+  prompt_min_sec: 1.0          # prompt 绝对下限（声纹参考最少长度）
+  prompt_max_sec: 10          # prompt 绝对上限
+  min_gen_sec:    1.5          # gen 区绝对下限（避免单 batch gen 帧数太少导致 MSE 方差大）
+  prompt_frac_lo: 0.2         # prompt 占音频比例下限
+  prompt_frac_hi: 0.7         # prompt 占音频比例上限
+
+  # ─── 样本质量过滤 ────────────────────────────────────────────────────────────
+  clip_peak_threshold: 0.99    # peak ≥ 此阈值视为数字削波，丢弃（见 docs/clipping_filter.md）
+  min_text_tokens: 8           # 去空格后字符数 < 此值的样本丢弃（异常短文本）
 
 training:
   # resume_from: "./checkpoint/step_0000000"
@@ -23,7 +36,7 @@ training:
   steps: 10000
   batch_size: 16
   gradient_accumulation: 1
-  learning_rate: 2e-5
+  learning_rate: 1.0e-4
   warmup_steps: 500
   max_grad_norm: 1.0
   save_every: 1000
@@ -64,25 +77,25 @@ components:
     mode: lora
 
   dit_adaln:
-    mode: frozen
+    mode: full
 
   text_conv:
-    mode: frozen
+    mode: full
 
   latent_embed:
-    mode: frozen
+    mode: full
 
   latent_cond_embedder:
-    mode: frozen
+    mode: full
 
   input_embed:
-    mode: frozen
+    mode: full
 
   output_proj:
-    mode: frozen
+    mode: full
 
   time_embed:
-    mode: frozen
+    mode: full
 
   # 文本编码器：通常冻结；跨域适配时可改 lora
   text_encoder:
